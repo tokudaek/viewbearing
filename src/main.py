@@ -22,6 +22,10 @@ def info(*args):
     print(pref, *args, file=sys.stdout)
 
 #############################################################
+def build_spatial_index(network):
+    pass
+
+#############################################################
 def get_osm_file(cityname):
     """Get OSM file from city name
 
@@ -138,9 +142,10 @@ def run_experiment(params_):
     points = [[0,0]]
     points = np.array(points)
 
+    tree = build_spatial_index(network)
     for point in points:
         fig, ax = plt.subplots()
-        roadid = get_nearest_road(point, network)
+        roadid = get_nearest_road(point, tree)
         roadangle = get_road_angle(roadid, network)
 
         plot_vectors(viewangle, roadangle, ax)
@@ -175,6 +180,7 @@ def main():
 
     info('Elapsed time:{}'.format(time.time()-t0))
 
+##########################################################
 if __name__ == "__main__":
     main()
 
