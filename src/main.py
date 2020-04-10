@@ -15,11 +15,89 @@ import matplotlib; matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from multiprocessing import Pool
 from datetime import datetime
+import igraph
 
 #############################################################
 def info(*args):
     pref = datetime.now().strftime('[%y%m%d %H:%M:%S]')
     print(pref, *args, file=sys.stdout)
+
+#############################################################
+def get_4connected_neighbours_2d(i, j, n, thoroidal=False):
+    """Get 4-connected neighbours. It does not check if there are repeated entries (2x2 or 1x1)
+
+    Args:
+    i(int): row of the matrix
+    j(int): column of the matrix
+    n(int): side of the square matrix
+
+    Returns:
+    ndarray 4x2: 4 neighbours indices
+    """
+    inds = []
+    if j > 0: # left
+        inds.append([i, j-1])
+    elif thoroidal:
+        inds.append([i, n-1])
+
+    if j < n-1: # right
+        inds.append([i, j+1])
+    elif thoroidal:
+        inds.append([i, 0])
+
+    if i > 0: # top
+        inds.append([i-1, j])
+    elif thoroidal:
+        inds.append([n-1, j])
+
+    if i < n-1: # bottom
+        inds.append([i+1, j])
+    elif thoroidal:
+        inds.append([0, j])
+
+    return np.array(inds)
+
+#############################################################
+def generate_lattice(n, thoroidal=False, s=10):
+    """Generate 2d lattice of side n
+
+    Args:
+    n(int): side of the lattice
+    thoroidal(bool): thoroidal lattice
+    s(float): edge size
+
+    Returns:
+    ndarray nx2, ndarray nxn: positions and adjacency matrix (triangular)
+    """
+    n2 = n*n
+    pos = np.ndarray((n2, 2), dtype=float)
+    adj = np.zeros((n2, n2), dtype=int)
+
+    k = 0
+    for j in range(n):
+        for i in range(n): # Set positions
+            pos[k] = [i*s, j*s]
+            k += 1
+
+    for i in range(n): # Set connectivity
+        for j in range(n):
+            neighs2d = get_4connected_neighbours_2d(i, j, n, thoroidal)
+            neighids = np.ravel_multi_index((neighs2d[:, 0], neighs2d[:, 1]), (n, n))
+            curidx = np.ravel_multi_index((i, j), (n, n))
+
+            for neigh in neighids:
+                adj[curidx, neigh] = 1
+    return pos, adj
+
+#############################################################
+def create_dummy_graph():
+    n = 4
+    pos, adj = generate_lattice(n, False, s=1)
+    g = igraph.Graph.Adjacency(adj.tolist(), mode=igraph.ADJ_UNDIRECTED)
+    g.vs['x'] = pos[:, 0]
+    g.vs['y'] = pos[:, 1]
+    # igraph.plot(g, '/tmp/graph.pdf')
+    return g
 
 #############################################################
 def build_spatial_index(network):
@@ -56,7 +134,7 @@ def parse_osm_network(osmpath):
 
 ##########################################################
 def get_nearest_road(point, network):
-    """Get id of the nearest street in the network
+    """Get id of the nearest street in the network. If there are two streets with same distance, get the first I find
 
     Args:
     point(np.array): array of shape (2,)
@@ -66,6 +144,14 @@ def get_nearest_road(point, network):
     int: from list of network
     """
     info(inspect.stack()[0][3] + '()')
+    for e in network.es:
+        p0 = np.array([network.vs[e.source]['x'], network.vs[e.source]['y']])
+        p1 = np.array([network.vs[e.target]['x'], network.vs[e.source]['y']])
+        versor = (p1 - p0) / np.linalg.norm(p1 - p0)
+        # TODO I am here
+    # print(p0, p1)
+    # for v in network.vs:
+        # print(v['x'], v['y'])
     return -1
 
 ##########################################################
@@ -137,15 +223,17 @@ def run_experiment(params_):
 
     # given alpha=heading
     osmfile = get_osm_file(cityname)
-    network = parse_osm_network(osmfile)
+    # network = parse_osm_network(osmfile)
 
-    points = [[0,0]]
+    network = create_dummy_graph()
+    points = [[0, 0]]
+
     points = np.array(points)
 
-    tree = build_spatial_index(network)
+    # tree = build_spatial_index(network)
     for point in points:
         fig, ax = plt.subplots()
-        roadid = get_nearest_road(point, tree)
+        roadid = get_nearest_road(point, network)
         roadangle = get_road_angle(roadid, network)
 
         plot_vectors(viewangle, roadangle, ax)
