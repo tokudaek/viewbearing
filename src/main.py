@@ -111,8 +111,8 @@ def create_dummy_graph(n, top, ax=None):
     if top == 'lattice':
         g = create_lattice(n, ax)
     elif top == 'grg':
-        radius = 3/n
-        print(radius)
+        radius = 10/n
+        # print(radius)
         g = igraph.Graph.GRG(n, radius=radius)
 
     plot_graph(g, ax)
@@ -132,6 +132,7 @@ def plot_graph(g, ax=None):
         segments[i, 1, :] = [xs[e.target], ys[e.target]]
     col = matplotlib.collections.LineCollection(segments)
     ax.add_collection(col)
+    ax.grid()
 
 #############################################################
 def build_spatial_index(network):
@@ -170,10 +171,12 @@ def parse_osm_network(osmpath):
 ##########################################################
 def is_inside_segment(point, versor, p0, p1, eps=0.001):
     """Assuming p=p0+versor*t"""
-    if versor[0] == 0: i = 1
-    else: i = 0
+    # if  np.abs(point[0] - 0.92512639) < 0.01:
+        # breakpoint()
 
-    trange = sorted([0, (p1[i] - p0[i] / versor[i])])
+    i = 1 if versor[0] == 0 else 0 # in case it is a vertical line
+
+    trange = sorted([0, (p1[i] - p0[i]) / versor[i]]) # p = p0 + p1*t
     t = (point[i] - p0[i]) / versor[i]
     if (t < trange[0] - eps) or (t > trange[1] + eps): return False
     else: return True
@@ -196,13 +199,18 @@ def get_nearest_road(point, network, ax=None):
     for i, e in enumerate(network.es):
         p0 = np.array([network.vs[e.source]['x'], network.vs[e.source]['y']])
         p1 = np.array([network.vs[e.target]['x'], network.vs[e.target]['y']])
+        # print(p0, p1)
+        # breakpoint()
 
         versor = (p1 - p0) / np.linalg.norm(p1 - p0) # versor
 
         projpoint = get_point_projection(point, p0, versor)
         inside = is_inside_segment(projpoint, versor, p0, p1, eps=0.001)
-        candidates = [p0, p1]
-        if inside: candidates.append(projpoint)
+        # candidates = [p0, p1]
+        if inside:
+            candidates = [projpoint]
+        else:
+            candidates = [p0, p1]
         print(p0, p1, projpoint, inside)
         localdists = cdist([point], candidates)[0]
         nearestid = np.argmin(localdists)
@@ -305,7 +313,7 @@ def run_experiment(params_):
     info(inspect.stack()[0][3] + '()')
     cityname = 'sao paulo'
     viewangle = np.pi / 4
-    nvertices = 5
+    nvertices = 50
 
     # given alpha=heading
     osmfile = get_osm_file(cityname)
@@ -317,15 +325,15 @@ def run_experiment(params_):
             figsize=(ncols*figscale, nrows*figscale))
 
     network = create_dummy_graph(nvertices, 'grg', ax)
-    points = [[1.0, .5]]
-    # points = np.random.rand(5, 2) + 0.05
+    # points = [[1.0, .5]]
+    points = np.random.rand(5, 2) + 0.05
 
     points = np.array(points)
 
     # tree = build_spatial_index(network)
     for point in points:
         roadid, refpoint, dist = get_nearest_road(point, network, ax)
-        # print(point, roadid, refpoint, dist)
+        print(point, roadid, refpoint, dist)
         roadangle = get_road_angle(roadid, network)
 
         plot_vectors(viewangle, roadangle, ax)
@@ -341,6 +349,7 @@ def main():
     t0 = time.time()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--nprocs', type=int, default=1, help='nprocs')
+    parser.add_argument('--seed', type=int, default=0, help='random seed')
     parser.add_argument('--outdir', default='/tmp/', help='Output directory')
     args = parser.parse_args()
 
@@ -348,9 +357,8 @@ def main():
 
     aux = list(product([args.outdir]))
 
-    seed = 0
-    np.random.seed(seed)
-    random.seed(seed)
+    np.random.seed(args.seed)
+    random.seed(args.seed)
     params = []
     for i, row in enumerate(aux):
         params.append(dict(outdir = row[0],))
