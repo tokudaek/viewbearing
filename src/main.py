@@ -9,20 +9,57 @@ from os.path import join as pjoin
 import inspect
 
 import sys
+import math
 import numpy as np
 from itertools import product
 import matplotlib; matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+from matplotlib.patches import Wedge
+from matplotlib.collections import PatchCollection
 from multiprocessing import Pool
 from datetime import datetime
 import igraph
 import random
 from scipy.spatial.distance import cdist
 
+palettehex = plt.rcParams['axes.prop_cycle'].by_key()['color']
+
+
 #############################################################
 def info(*args):
     pref = datetime.now().strftime('[%y%m%d %H:%M:%S]')
     print(pref, *args, file=sys.stdout)
+
+##########################################################
+def hex2rgb(hexcolours, alpha=None):
+    rgbcolours = np.zeros((len(hexcolours), 3), dtype=int)
+    for i, h in enumerate(hexcolours):
+        rgbcolours[i, :] = np.array([int(h.lstrip('#')[i:i+2], 16) for i in (0, 2, 4)])
+
+    if alpha != None:
+        aux = np.zeros((len(hexcolours), 4), dtype=float)
+        aux[:, :3] = rgbcolours / 255.0
+        aux[:, -1] = .7 # alpha
+        rgbcolours = aux
+
+    return rgbcolours
+
+##########################################################
+def versor2angle(versor, unit='radian'):
+    """Convert versor to angle
+
+    Args:
+    versor(np.ndarray): 2d versor
+    unit(str): degree or radian
+
+    Returns:
+    float: angle
+    """
+    info(inspect.stack()[0][3] + '()')
+    zeroversor = np.array([1, 0])
+    anglerad = np.arccos(np.dot(versor, zeroversor))
+    if unit == 'radian': return anglerad
+    else: return math.degrees(anglerad)
 
 #############################################################
 def get_4connected_neighbours_2d(i, j, n, thoroidal=False):
@@ -112,10 +149,9 @@ def create_dummy_graph(n, top, ax=None):
         g = create_lattice(n, ax)
     elif top == 'grg':
         radius = 10/n
-        # print(radius)
         g = igraph.Graph.GRG(n, radius=radius)
 
-    plot_graph(g, ax)
+    if ax: plot_graph(g, ax)
     return g
 
 #############################################################
@@ -124,15 +160,16 @@ def plot_graph(g, ax=None):
     if not ax: return
     xs = g.vs['x']
     ys = g.vs['y']
-    ax.scatter(xs, ys)
+    # ax.scatter(xs, ys, s=10)
 
     segments = np.zeros((g.ecount(), 2, 2), dtype=float)
     for i, e in enumerate(g.es()):
         segments[i, 0, :] = [xs[e.source], ys[e.source]]
         segments[i, 1, :] = [xs[e.target], ys[e.target]]
-    col = matplotlib.collections.LineCollection(segments)
+    col = matplotlib.collections.LineCollection(segments, zorder=0)
     ax.add_collection(col)
     ax.grid()
+    ax.set_axisbelow(True)
 
 #############################################################
 def build_spatial_index(network):
@@ -188,6 +225,7 @@ def get_nearest_road(point, network, ax=None):
     Args:
     point(np.array): array of shape (2,)
     network(igraph.Graph): network in osm format
+    ax(matplotlib.Axis): axis to plot
 
     Returns:
     int: from list of network
@@ -195,23 +233,21 @@ def get_nearest_road(point, network, ax=None):
     info(inspect.stack()[0][3] + '()')
     dists = np.zeros(network.ecount(), dtype=float)
     refpoints = np.zeros((network.ecount(), 2), dtype=float)
+    arevertices = np.zeros((network.ecount()), dtype=int)
 
     for i, e in enumerate(network.es):
         p0 = np.array([network.vs[e.source]['x'], network.vs[e.source]['y']])
         p1 = np.array([network.vs[e.target]['x'], network.vs[e.target]['y']])
-        # print(p0, p1)
-        # breakpoint()
 
         versor = (p1 - p0) / np.linalg.norm(p1 - p0) # versor
 
         projpoint = get_point_projection(point, p0, versor)
         inside = is_inside_segment(projpoint, versor, p0, p1, eps=0.001)
-        # candidates = [p0, p1]
         if inside:
             candidates = [projpoint]
         else:
             candidates = [p0, p1]
-        print(p0, p1, projpoint, inside)
+            arevertices[i] = True
         localdists = cdist([point], candidates)[0]
         nearestid = np.argmin(localdists)
         dists[i] = localdists[nearestid]
@@ -219,13 +255,55 @@ def get_nearest_road(point, network, ax=None):
 
     edgeid = np.argmin(dists)
     refpoint = refpoints[edgeid]
+    isvertex = bool(arevertices[edgeid])
+    angle = refpoint - point
+    angle /= np.linalg.norm(angle)
     dist = dists[edgeid]
 
     if ax:
-        c = [np.random.rand(3,)]
-        ax.scatter(point[0], point[1], c=c, s=20)
-        ax.scatter(refpoint[0], refpoint[1], c=c, s=15)
-    return edgeid, refpoint, dist
+        eps = 0.05
+        # c = [np.random.rand(3,)]
+        ax.scatter(point[0], point[1], c=palettehex[2], s=10)
+        # ax.scatter(refpoint[0], refpoint[1], c=c, s=8)
+        # mid = (point + refpoint) / 2
+        # anglestr = '{:.1f}, {:.1f}'.format(angle[0], angle[1])
+        # ax.text(mid[0]-eps, mid[1], anglestr, fontsize=5)
+        # ax.text(mid[0]+eps, mid[1], str(isvertex), fontsize=5)
+    return edgeid, refpoint, isvertex, dist
+
+##########################################################
+def get_viewer_point(snappedpt, viewversor, step, ax=None):
+    """Get the  viewer position in the street
+
+    Args:
+    snappedpt(np.ndarray): 2d coordinates
+    viewversor(np.ndarray): 2d versor of the view
+    ax(matplotlib.Axis): axis to plot
+    """
+    return snappetpt - viewversor * step
+
+##########################################################
+def plot_view_cone(snappedpt, step, rad, coneangle, viewversor, network, ax=None):
+    """Plot the view cone from the @refpoint in the @network
+
+    Args:
+    refpoint(np.ndarray(2)): point 2d coordinates
+    step(float): distance to the point
+    viewversor(np.ndarray): view direction
+    network(igraph.Graph): network
+    ax(matplotlib.Axis): axis to plot
+    """
+
+    info(inspect.stack()[0][3] + '()')
+    viewerpt = snappedpt - viewversor * step
+    ax.scatter(viewerpt[0], viewerpt[1], c='k', s=5)
+
+    c = np.ones(4, dtype=float) * 0.5
+    viewangle = versor2angle(viewversor, unit='degrees')
+    patches = [Wedge(viewerpt, rad, viewangle-coneangle/2,
+        viewangle+coneangle/2, color=c, linewidth=0)]
+    p = PatchCollection(patches, match_original=True)
+    ax.add_collection(p)
 
 ##########################################################
 def get_point_projection(point, p0, versor):
@@ -261,6 +339,10 @@ def get_road_angle(roadid, network):
 
     info(inspect.stack()[0][3] + '()')
 
+    for i, e in enumerate(network.es):
+        p0 = np.array([network.vs[e.source]['x'], network.vs[e.source]['y']])
+        p1 = np.array([network.vs[e.target]['x'], network.vs[e.target]['y']])
+        versor = (p1 - p0) / np.linalg.norm(p1 - p0) # versor
     return 0
 
 ##########################################################
@@ -312,8 +394,13 @@ def plot_street_view(point, viewangle, roadangle, network, ax):
 def run_experiment(params_):
     info(inspect.stack()[0][3] + '()')
     cityname = 'sao paulo'
-    viewangle = np.pi / 4
-    nvertices = 50
+    # viewangle = np.pi / 4
+    viewversor = np.array([0.0, 1.0]); viewversor /= np.linalg.norm(viewversor)
+    nvertices = 100
+    nviewers = 10
+    step = 0.02
+    conerad = 0.05
+    coneangle = 90
 
     # given alpha=heading
     osmfile = get_osm_file(cityname)
@@ -325,20 +412,19 @@ def run_experiment(params_):
             figsize=(ncols*figscale, nrows*figscale))
 
     network = create_dummy_graph(nvertices, 'grg', ax)
-    # points = [[1.0, .5]]
-    points = np.random.rand(5, 2) + 0.05
-
-    points = np.array(points)
+    # points = np.array([[1.0, .5]])
+    points = np.random.rand(nviewers, 2) + 0.05
 
     # tree = build_spatial_index(network)
     for point in points:
-        roadid, refpoint, dist = get_nearest_road(point, network, ax)
-        print(point, roadid, refpoint, dist)
-        roadangle = get_road_angle(roadid, network)
+        edgeid, snappedpt, isvertex, dist = get_nearest_road(point, network, ax)
+        plot_view_cone(snappedpt, step, conerad, coneangle, viewversor, network, ax)
+        # print(point, roadid, refpoint, dist)
+        # roadangle = get_road_angle(roadid, network)
 
-        plot_vectors(viewangle, roadangle, ax)
-        plot_top_view(point, viewangle, roadangle, network, ax)
-        plot_street_view(point, viewangle, roadangle, network, ax)
+        # plot_vectors(viewangle, roadangle, ax)
+        # plot_top_view(point, viewangle, roadangle, network, ax)
+        # plot_street_view(point, viewangle, roadangle, network, ax)
         # plt.close()
 
     plt.savefig(pjoin(params_['outdir'], 'graph.pdf'))
